@@ -1,0 +1,32 @@
+services:
+  asolhelpdeskmcp:
+    build: .
+    image: asolhelpdeskmcp:latest
+    container_name: asolhelpdeskmcp
+    restart: unless-stopped
+    environment:
+      - TZ=Europe/Prague
+      - PORT=8095
+      - HOST=0.0.0.0
+      - API_URL=https://avaplace.com/api/asoleu/helpdesk
+      - AUTH_URL=https://avaplace.com/api/asol/idp/connect/token
+    env_file:
+      - path: .env
+        required: false
+    networks:
+      - infrastructure_default
+    ports:
+      - "8095:8095"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8095/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    labels:
+      - "app=asolhelpdeskmcp"
+      - "maintainer=macikm"
+
+networks:
+  infrastructure_default:
+    external: true
