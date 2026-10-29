@@ -101,12 +101,16 @@ class HelpdeskClient:
         solved_to: Optional[str] = None,
         page_size: int = 50,
         page_index: int = 0,
+        offset: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Vyhledá tikety podle zadaných filtrů."""
         endpoint = f"{self.api_url}/api/v1/Tickets"
+        limit = max(1, min(page_size, 500))
+        actual_offset = offset if offset is not None else (page_index * limit)
+
         params: Dict[str, Any] = {
-            "pagingFilter.PageSize": min(page_size, 500),
-            "pagingFilter.PageIndex": page_index,
+            "pagingFilter.Limit": limit,
+            "pagingFilter.Offset": actual_offset,
         }
 
         if state:
@@ -168,11 +172,17 @@ class HelpdeskClient:
                 "solved": t.get("solved"),
             })
 
+        has_more = (actual_offset + len(formatted)) < total
         return {
             "total_count": total,
             "returned_count": len(formatted),
             "page_index": page_index,
-            "page_size": page_size,
+            "page_size": limit,
+            "offset": actual_offset,
+            "limit": limit,
+            "has_more": has_more,
+            "next_page_index": (page_index + 1) if has_more else None,
+            "next_offset": (actual_offset + len(formatted)) if has_more else None,
             "tickets": formatted,
         }
 

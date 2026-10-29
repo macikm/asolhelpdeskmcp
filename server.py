@@ -135,13 +135,14 @@ def search_tickets(
     created_to: Optional[str] = None,
     page_size: int = 50,
     page_index: int = 0,
+    offset: Optional[int] = None,
     ctx: Context = None,
 ) -> Any:
     """
     Vyhledá tikety v AVAplace Helpdesku podle zadaných filtrů.
     Všechny filtry jsou volitelné.
     
-    Parametry:
+    Parametry filtrů:
     - state: Interní stav (Draft, ToDo, Assigned, InProgress, Postponed, Question, Solved, Done)
     - external_state: Externí stav (Draft, InProgress, Question, Solved, Done)
     - priority: Priorita tiketu ('A' = Vysoká, 'B' = Střední, 'C' = Nízká)
@@ -150,7 +151,13 @@ def search_tickets(
     - customer: Název zákazníka/firmy
     - issuer: Jméno žadatele
     - created_from / created_to: Datumové filtry ve formátu YYYY-MM-DD
+    
+    Parametry stránkování:
     - page_size: Počet položek na stránku (výchozí 50, max 500)
+    - page_index: Číslo stránky (0 = první stránka, 1 = druhá stránka atd.)
+    - offset: Přímý offset přeskočených záznamů (volitelné, alternativa k page_index)
+    
+    Odpověď obsahuje 'has_more' (boolean) a 'next_page_index' pro načtení další stránky.
     """
     token = resolve_auth(ctx)
     if not token:
@@ -171,6 +178,7 @@ def search_tickets(
             created_to=created_to,
             page_size=page_size,
             page_index=page_index,
+            offset=offset,
         )
     except Exception as e:
         return f"Chyba při volání Helpdesk API: {e}"
