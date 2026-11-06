@@ -250,7 +250,7 @@ def search_tickets(
 @mcp.tool()
 def get_ticket_detail(ticket_identifier: str, ctx: Context = None) -> Any:
     """
-    Vrátí kompletní detail konkrétního tiketu.
+    Vrátí kompletní detail konkrétního tiketu včetně všech komentářů a historie řešení.
     
     Parametry:
     - ticket_identifier: Unikátní identifikátor (GUID) nebo kód tiketu včetně aplikace, např. 'HD-12345'
@@ -263,6 +263,24 @@ def get_ticket_detail(ticket_identifier: str, ctx: Context = None) -> Any:
         return client.get_ticket(token=token, ticket_identifier=ticket_identifier)
     except Exception as e:
         return f"Chyba při načítání detailu tiketu '{ticket_identifier}': {e}"
+
+
+@mcp.tool()
+def get_ticket_comments(ticket_identifier: str, ctx: Context = None) -> Any:
+    """
+    Vrátí všechny komentáře (konverzaci žadatele a řešitelů, interní poznámky a historii) k danému tiketu.
+    
+    Parametry:
+    - ticket_identifier: Unikátní identifikátor (GUID) nebo kód tiketu včetně aplikace, např. 'HD-12345'
+    """
+    token = resolve_auth(ctx)
+    if not token:
+        return "⚠️ Nejste přihlášeni. Použijte nástroj 'helpdesk_login(username, password)'."
+
+    try:
+        return client.get_ticket_comments(token=token, ticket_identifier=ticket_identifier)
+    except Exception as e:
+        return f"Chyba při načítání komentářů pro tiket '{ticket_identifier}': {e}"
 
 
 @mcp.tool()

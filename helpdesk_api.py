@@ -138,29 +138,29 @@ class HelpdeskClient:
         try:
             filters_list = []
             if state:
-                filters_list.append({"field": "State", "value": [state], "operator": "Equal"})
+                filters_list.append({"field": "State", "type": "List", "value": [state], "operator": "Equal"})
             if external_state:
-                filters_list.append({"field": "ExternalState", "value": [external_state], "operator": "Equal"})
+                filters_list.append({"field": "ExternalState", "type": "List", "value": [external_state], "operator": "Equal"})
             if priority:
-                filters_list.append({"field": "Priority", "value": [priority], "operator": "Equal"})
+                filters_list.append({"field": "Priority", "type": "List", "value": [priority], "operator": "Equal"})
             if customer:
-                filters_list.append({"field": "Customer", "value": [customer], "operator": "Contains"})
+                filters_list.append({"field": "Customer", "type": "Text", "value": [customer], "operator": "Contains"})
             if issuer:
-                filters_list.append({"field": "IssuerFullName", "value": [issuer], "operator": "Contains"})
+                filters_list.append({"field": "IssuerFullName", "type": "Text", "value": [issuer], "operator": "Contains"})
             if application_id:
-                filters_list.append({"field": "ApplicationId", "value": [application_id], "operator": "Equal"})
+                filters_list.append({"field": "ApplicationId", "type": "List", "value": [application_id], "operator": "Equal"})
             if application_area_id:
-                filters_list.append({"field": "ApplicationAreaId", "value": [application_area_id], "operator": "Equal"})
+                filters_list.append({"field": "ApplicationAreaId", "type": "List", "value": [application_area_id], "operator": "Equal"})
             if application_sub_area_id:
-                filters_list.append({"field": "ApplicationSubAreaId", "value": [application_sub_area_id], "operator": "Equal"})
+                filters_list.append({"field": "ApplicationSubAreaId", "type": "List", "value": [application_sub_area_id], "operator": "Equal"})
             if level is not None:
-                filters_list.append({"field": "Level", "value": [level], "operator": "Equal"})
+                filters_list.append({"field": "Level", "type": "Number", "value": [level], "operator": "Equal"})
             if partner_l1:
-                filters_list.append({"field": "PartnerL1", "value": [partner_l1], "operator": "Contains"})
+                filters_list.append({"field": "PartnerL1", "type": "Text", "value": [partner_l1], "operator": "Contains"})
             if partner_l2:
-                filters_list.append({"field": "PartnerL2", "value": [partner_l2], "operator": "Contains"})
+                filters_list.append({"field": "PartnerL2", "type": "Text", "value": [partner_l2], "operator": "Contains"})
             if processor:
-                filters_list.append({"field": "Solver", "value": [processor], "operator": "Contains"})
+                filters_list.append({"field": "Solver", "type": "Text", "value": [processor], "operator": "Contains"})
 
             post_body = {
                 "offset": actual_offset,
@@ -181,12 +181,15 @@ class HelpdeskClient:
                     items = data.get("items", [])
                     total = data.get("totalItemsCount", data.get("totalCount", len(items)))
                     use_post_success = True
-        except Exception:
-            # Fallback na GET endpoint
-            pass
+                    print(f"✅ [Tickets/list] Úspěšně načteno {len(items)} tiketů z grid endpointu (total: {total})")
+            else:
+                print(f"⚠️ [Tickets/list Error] Status {resp.status_code}: {resp.text[:400]}")
+        except Exception as ex:
+            print(f"⚠️ [Tickets/list Exception] {ex}")
 
         # 2. POKUS (Fallback): Klasický GET /api/v1/Tickets se všemi variantami parametrů
         if not use_post_success:
+            print(f"ℹ️ [Tickets] Volám záložní GET /api/v1/Tickets endpoint...")
             get_endpoint = f"{self.api_url}/api/v1/Tickets"
             params: Dict[str, Any] = {
                 "Limit": limit,
@@ -322,14 +325,58 @@ class HelpdeskClient:
         }
 
     def get_ticket(self, token: str, ticket_identifier: str) -> Dict[str, Any]:
-        """Získá detail konkrétního tiketu podle ID nebo kódu (např. HD-12345)."""
+        """Získá detail konkrétního tiketu podle ID nebo kódu (např. HD-12345) včetně komentářů."""
         ticket_id = ticket_identifier.strip()
         endpoint = f"{self.api_url}/api/v1/Tickets/{ticket_id}"
 
         headers = self._get_headers(token)
         resp = requests.get(endpoint, headers=headers, timeout=20)
         resp.raise_for_status()
-        return resp.json()
+        data = resp.json()
+
+        # Automatické načtení komentářů k tiketu
+        try:
+            real_id = data.get("id") or ticket_id
+            data["comments"] = self.get_ticket_comments(token=token, ticket_identifier=real_id)
+        except Exception as e:
+            data["comments"] = []
+
+        return data
+
+    def get_ticket_comments(self, token: str, ticket_identifier: str) -> List[Dict[str, Any]]:
+        """Získá komentáře (konverzaci a historii řešení) k danému tiketu."""
+        ticket_id = ticket_identifier.strip()
+        endpoint = f"{self.api_url}/api/v1/Tickets/{ticket_id}/comments"
+        headers = self._get_headers(token)
+        params = {
+            "Offset": 0,
+            "Limit": 200,
+            "SortBy": "CreatedOn",
+            "Direction": "Ascending",
+        }
+        resp = requests.get(endpoint, headers=headers, params=params, timeout=20)
+        resp.raise_for_status()
+
+        data = resp.json()
+        if isinstance(data, dict) and "items" in data:
+            comments = data["items"]
+        elif isinstance(data, list):
+            comments = data
+        else:
+            comments = []
+
+        return [
+            {
+                "id": c.get("id"),
+                "created_on": c.get("createdOn"),
+                "created_by": c.get("createdBy"),
+                "modified_on": c.get("modifiedOn"),
+                "title": c.get("title"),
+                "content": c.get("content"),
+                "is_internal": c.get("isInternal", False),
+            }
+            for c in comments
+        ]
 
     def get_applications(self, token: str) -> List[Dict[str, Any]]:
         """Získá seznam dostupných aplikací."""
