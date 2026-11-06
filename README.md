@@ -121,7 +121,8 @@ Model automaticky zavolá nástroj `helpdesk_login`, získá OAuth2 token a od t
 | Nástroj | Popis |
 |---|---|
 | `helpdesk_login(username, password)` | Přihlášení do AVAplace (získá a uloží OAuth2 token pro session). |
-| `search_tickets(...)` | Filtrování tiketů podle stavu (`InProgress`, `Solved`), priority (`A`, `B`, `C`), zákazníka, řešitele, data či fulltextu. |
+| `search_tickets(...)` | Filtrování tiketů podle stavu, priority, zákazníka, řešitele, aplikace, oblasti/podoblasti, úrovně L1/L2, partnera L1/L2, data či fulltextu. Podporuje řazení (`sort_by`, `sort_direction`). |
 | `get_ticket_detail(ticket_identifier)` | Vrátí kompletní detail tiketu dle ID nebo kódu (např. `HD-12345`). |
-| `get_applications()` | Seznam modulů / aplikací v Helpdesku. |
-| `get_filter_options()` | Vrátí číselníky platných stavů a priorit pro nápovědu modelu. |
+| `get_applications()` | Seznam modulů / aplikací v Helpdesku (včetně jejich ID). |
+| `get_application_areas(application_id)` | Vrátí hierarchii oblastí a podoblastí pro danou aplikaci (pro filtry v `search_tickets`). |
+| `get_filter_options()` | Vrátí číselníky platných stavů, priorit, úrovní a typů pro nápovědu modelu. |
