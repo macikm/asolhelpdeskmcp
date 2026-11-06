@@ -134,6 +134,7 @@ class HelpdeskClient:
         items = None
         total = 0
         use_post_success = False
+        post_error_info = None
 
         try:
             filters_list = []
@@ -168,8 +169,8 @@ class HelpdeskClient:
                 "sortColumn": sort_col,
                 "sortOrder": order_val,
                 "filter": {
-                    "wideSearch": search_text if search_text else None,
-                    "filters": filters_list if filters_list else None,
+                    "wideSearch": search_text if search_text else "",
+                    "filters": filters_list,
                 }
             }
 
@@ -183,8 +184,16 @@ class HelpdeskClient:
                     use_post_success = True
                     print(f"✅ [Tickets/list] Úspěšně načteno {len(items)} tiketů z grid endpointu (total: {total})")
             else:
+                post_error_info = {
+                    "status_code": resp.status_code,
+                    "error_text": resp.text[:1000],
+                    "payload_sent": post_body,
+                }
                 print(f"⚠️ [Tickets/list Error] Status {resp.status_code}: {resp.text[:400]}")
         except Exception as ex:
+            post_error_info = {
+                "exception": str(ex),
+            }
             print(f"⚠️ [Tickets/list Exception] {ex}")
 
         # 2. POKUS (Fallback): Klasický GET /api/v1/Tickets se všemi variantami parametrů
@@ -299,8 +308,11 @@ class HelpdeskClient:
                 "customer": t.get("issuerCompany") or t.get("customer"),
                 "issuer": t.get("issuerName") or t.get("issuerFullName"),
                 "processor": t.get("solverName") or t.get("processorFullName") or t.get("solverL1Name"),
+                "application_id": t.get("applicationId"),
                 "application_area": t.get("applicationAreaName"),
+                "application_area_id": t.get("applicationAreaId"),
                 "application_sub_area": t.get("applicationSubAreaName"),
+                "application_sub_area_id": t.get("applicationSubAreaId"),
                 "partner_l1": t.get("partnerL1Name") or t.get("partnerL1Code"),
                 "partner_l2": t.get("partnerL2Name") or t.get("partnerL2Code"),
                 "created": t.get("createdOn") or t.get("created"),
@@ -310,8 +322,28 @@ class HelpdeskClient:
                 "jira_issue": t.get("jiraIssueKey"),
             })
 
+        # Pojistka: Klientské in-memory řazení, pokud GET endpoint vrátil neseřazená data
+        if sort_by and formatted:
+            sort_key_map = {
+                "createdon": "created",
+                "created": "created",
+                "modifiedon": "modified",
+                "modified": "modified",
+                "ticketcode": "ticket_code",
+                "number": "ticket_code",
+                "title": "title",
+                "priority": "priority",
+                "state": "state",
+            }
+            target_key = sort_key_map.get(sort_by.lower(), sort_by.lower())
+            is_reverse = ("desc" in order_val.lower())
+            try:
+                formatted.sort(key=lambda x: str(x.get(target_key) or ""), reverse=is_reverse)
+            except Exception:
+                pass
+
         has_more = (actual_offset + len(formatted)) < total
-        return {
+        result = {
             "total_count": total,
             "returned_count": len(formatted),
             "page_index": page_index,
@@ -321,10 +353,22 @@ class HelpdeskClient:
             "has_more": has_more,
             "next_page_index": (page_index + 1) if has_more else None,
             "next_offset": (actual_offset + len(formatted)) if has_more else None,
+            "endpoint_used": "POST /api/v1/Tickets/list" if use_post_success else "GET /api/v1/Tickets (fallback)",
             "tickets": formatted,
         }
 
-    def get_ticket(self, token: str, ticket_identifier: str) -> Dict[str, Any]:
+        # Pokud POST endpoint selhal, přidáme do odpovědi srozumitelné varování a detail chyby
+        if post_error_info:
+            result["warning"] = (
+                f"Upozornění: Grid endpoint POST /api/v1/Tickets/list vrátil chybu "
+                f"(HTTP {post_error_info.get('status_code')}). Použit záložní GET endpoint. "
+                f"Detaily: {post_error_info.get('error_text', '')[:300]}"
+            )
+            result["post_error_debug"] = post_error_info
+
+        return result
+
+    def get_ticket(self, token: str, ticket_identifier: str, load_comments: bool = True) -> Dict[str, Any]:
         """Získá detail konkrétního tiketu podle ID nebo kódu (např. HD-12345) včetně komentářů."""
         ticket_id = ticket_identifier.strip()
         endpoint = f"{self.api_url}/api/v1/Tickets/{ticket_id}"
@@ -335,18 +379,32 @@ class HelpdeskClient:
         data = resp.json()
 
         # Automatické načtení komentářů k tiketu
-        try:
-            real_id = data.get("id") or ticket_id
-            data["comments"] = self.get_ticket_comments(token=token, ticket_identifier=real_id)
-        except Exception as e:
-            data["comments"] = []
+        if load_comments:
+            try:
+                real_id = data.get("id") or ticket_id
+                data["comments"] = self.get_ticket_comments(token=token, ticket_identifier=real_id)
+            except Exception:
+                data["comments"] = []
 
         return data
 
     def get_ticket_comments(self, token: str, ticket_identifier: str) -> List[Dict[str, Any]]:
-        """Získá komentáře (konverzaci a historii řešení) k danému tiketu."""
+        """Získá komentáře (konverzaci a historii řešení) k danému tiketu podle ID nebo kódu."""
+        import re
         ticket_id = ticket_identifier.strip()
-        endpoint = f"{self.api_url}/api/v1/Tickets/{ticket_id}/comments"
+        
+        # Ověřit, zda je identifikátor GUID (36 znaků s pomlčkami). Pokud ne, přeložit přes get_ticket
+        is_guid = bool(re.match(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", ticket_id))
+        real_id = ticket_id
+        if not is_guid:
+            try:
+                ticket_data = self.get_ticket(token=token, ticket_identifier=ticket_id, load_comments=False)
+                if isinstance(ticket_data, dict) and ticket_data.get("id"):
+                    real_id = ticket_data.get("id")
+            except Exception as e:
+                print(f"⚠️ Nelze přeložit kód tiketu '{ticket_id}' na GUID: {e}")
+
+        endpoint = f"{self.api_url}/api/v1/Tickets/{real_id}/comments"
         headers = self._get_headers(token)
         params = {
             "Offset": 0,
