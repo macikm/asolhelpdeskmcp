@@ -157,8 +157,9 @@ class HelpdeskClient:
 
         try:
             filters_list = []
+            applied_filters = set()
 
-            def add_filter(candidate_names: List[str], val: Any, default_type: str, default_op: str):
+            def add_filter(candidate_names: List[str], val: Any, param_name: str, default_type: str = "Text"):
                 if val is None or val == "":
                     return
                 target_field = None
@@ -174,28 +175,96 @@ class HelpdeskClient:
                     target_field = candidate_names[0]
 
                 if target_field:
-                    val_list = val if isinstance(val, list) else [val]
+                    # Správný operátor podle typu pole
+                    if target_type in ("List", "HierarchicalList"):
+                        op = "Includes"
+                    elif target_type == "Text":
+                        op = "Contains"
+                    else:
+                        op = "Equal"
+
+                    # Hodnoty musí být pole
+                    if isinstance(val, list):
+                        val_list = [str(x) for x in val]
+                    else:
+                        val_list = [str(val)]
+
                     filters_list.append({
                         "field": target_field,
                         "type": target_type,
                         "value": val_list,
-                        "operator": default_op
+                        "operator": op,
                     })
+                    applied_filters.add(param_name)
+                    print(f"✅ Přidán POST filtr: {target_field} ({target_type}) {op} {val_list}")
                 else:
-                    print(f"ℹ️ Pole z kandidátů {candidate_names} není v definici gridu, vynechávám z POST")
+                    print(f"⚠️ Pole pro parametr '{param_name}' (kandidáti {candidate_names}) není v definici gridu")
 
-            add_filter(["State", "state"], state, "List", "Equal")
-            add_filter(["ExternalState", "externalState"], external_state, "List", "Equal")
-            add_filter(["Priority", "priority"], priority, "List", "Equal")
-            add_filter(["Customer", "customer", "IssuerCompany"], customer, "Text", "Contains")
-            add_filter(["IssuerFullName", "issuerFullName", "IssuerName", "Issuer"], issuer, "Text", "Contains")
-            add_filter(["ApplicationId", "applicationId", "Application", "application", "ApplicationCode"], application_id, "List", "Equal")
-            add_filter(["ApplicationAreaId", "applicationAreaId", "ApplicationArea", "applicationArea", "AreaId", "Area"], application_area_id, "List", "Equal")
-            add_filter(["ApplicationSubAreaId", "applicationSubAreaId", "ApplicationSubArea", "applicationSubArea", "SubAreaId", "SubArea"], application_sub_area_id, "List", "Equal")
-            add_filter(["Level", "level"], level, "Number", "Equal")
-            add_filter(["PartnerL1", "partnerL1", "AssignedPartnerL1", "assignedPartnerL1", "PartnerL1Name", "Partner"], partner_l1, "Text", "Contains")
-            add_filter(["PartnerL2", "partnerL2", "AssignedPartnerL2", "assignedPartnerL2", "PartnerL2Name"], partner_l2, "Text", "Contains")
-            add_filter(["Solver", "solver", "AssignedSolver", "assignedSolver", "Processor"], processor, "Text", "Contains")
+            # 1. Běžné filtry s přímou shodou v definici gridu
+            add_filter(["State", "state"], state, "state", "List")
+            add_filter(["ExternalState", "externalState"], external_state, "external_state", "List")
+            add_filter(["Priority", "priority"], priority, "priority", "List")
+            add_filter(["Level", "level"], str(level) if level is not None else None, "level", "List")
+            add_filter(["Customer", "customer", "IssuerCompany"], customer, "customer", "Text")
+            add_filter(["IssuerFullName", "issuerFullName", "IssuerName", "Issuer"], issuer, "issuer", "Text")
+            add_filter(["AssignedPartnerL1", "PartnerL1", "partnerL1", "partnerl1"], partner_l1, "partner_l1", "Text")
+            add_filter(["AssignedPartnerL2", "PartnerL2", "partnerL2", "partnerl2"], partner_l2, "partner_l2", "Text")
+            add_filter(["Solver", "solver", "AssignedSolver", "assignedSolver", "Processor"], processor, "processor", "Text")
+
+            # 2. Hierarchické pole aplikace a oblasti (ApplicationAreaSubarea)
+            # V gridu Helpdesku je celá hierarchie sloučena do pole ApplicationAreaSubarea
+            hierarchy_val = []
+            if application_sub_area_id:
+                hierarchy_val.append(str(application_sub_area_id))
+                applied_filters.add("application_sub_area_id")
+            elif application_area_id:
+                hierarchy_val.append(str(application_area_id))
+                applied_filters.add("application_area_id")
+            elif application_id:
+                hierarchy_val.append(str(application_id))
+                applied_filters.add("application_id")
+
+            if hierarchy_val:
+                # Ověřit, jak se pole jmenuje v definici gridu
+                hier_field_name = "ApplicationAreaSubarea"
+                hier_type = "HierarchicalList"
+                if supported_fields:
+                    for cand in ["applicationareasubarea", "applicationarea", "area"]:
+                        if cand in supported_fields:
+                            hier_field_name = supported_fields[cand]["fieldName"]
+                            hier_type = supported_fields[cand]["type"] or "HierarchicalList"
+                            break
+
+                filters_list.append({
+                    "field": hier_field_name,
+                    "type": hier_type,
+                    "value": hierarchy_val,
+                    "operator": "Includes",
+                })
+                print(f"✅ Přidán POST filtr oblasti: {hier_field_name} ({hier_type}) Includes {hierarchy_val}")
+
+            # Kontrola vynechaných filtrů zadaných uživatelem
+            omitted_user_filters = []
+            if state and "state" not in applied_filters:
+                omitted_user_filters.append("state")
+            if external_state and "external_state" not in applied_filters:
+                omitted_user_filters.append("external_state")
+            if priority and "priority" not in applied_filters:
+                omitted_user_filters.append("priority")
+            if level is not None and "level" not in applied_filters:
+                omitted_user_filters.append("level")
+            if customer and "customer" not in applied_filters:
+                omitted_user_filters.append("customer")
+            if issuer and "issuer" not in applied_filters:
+                omitted_user_filters.append("issuer")
+            if partner_l1 and "partner_l1" not in applied_filters:
+                omitted_user_filters.append("partner_l1")
+            if processor and "processor" not in applied_filters:
+                omitted_user_filters.append("processor")
+            if application_area_id and "application_area_id" not in applied_filters:
+                omitted_user_filters.append("application_area_id")
+            if application_sub_area_id and "application_sub_area_id" not in applied_filters:
+                omitted_user_filters.append("application_sub_area_id")
 
             post_body = {
                 "offset": actual_offset,
@@ -391,13 +460,21 @@ class HelpdeskClient:
             "tickets": formatted,
         }
 
-        # Pokud POST endpoint selhal, přidáme do odpovědi srozumitelné varování a detail chyby
+        warnings = []
         if post_error_info:
-            result["warning"] = (
-                f"Upozornění: Grid endpoint POST /api/v1/Tickets/list vrátil chybu "
+            warnings.append(
+                f"Grid endpoint POST /api/v1/Tickets/list vrátil chybu "
                 f"(HTTP {post_error_info.get('status_code')}). Použit záložní GET endpoint. "
                 f"Detaily: {post_error_info.get('error_text', '')[:300]}"
             )
+        if omitted_user_filters:
+            warnings.append(
+                f"Tyto zadané filtry nebylo možné v Helpdesku uplatnit: {', '.join(omitted_user_filters)}."
+            )
+
+        if warnings:
+            result["warning"] = " | ".join(warnings)
+        if post_error_info:
             result["post_error_debug"] = post_error_info
 
         return result

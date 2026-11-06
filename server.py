@@ -22,7 +22,7 @@ from helpdesk_api import HelpdeskClient
 # Načtení .env pokud existuje
 load_dotenv()
 
-SERVER_VERSION = "1.33.0"
+SERVER_VERSION = "1.34.0"
 PORT = int(os.environ.get("PORT", "8095"))
 HOST = os.environ.get("HOST", "0.0.0.0")
 API_URL = os.environ.get("API_URL", "https://avaplace.com/api/asoleu/helpdesk")
