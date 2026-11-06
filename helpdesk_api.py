@@ -113,107 +113,178 @@ class HelpdeskClient:
         page_index: int = 0,
         offset: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """Vyhledá tikety podle zadaných filtrů."""
-        endpoint = f"{self.api_url}/api/v1/Tickets"
+        """Vyhledá tikety podle zadaných filtrů s podporou řazení a oblastí."""
         limit = max(1, min(page_size, 500))
         actual_offset = offset if offset is not None else (page_index * limit)
+        headers = self._get_headers(token)
 
-        params: Dict[str, Any] = {
-            "Limit": limit,
-            "Offset": actual_offset,
-            "pagingFilter.Limit": limit,
-            "pagingFilter.Offset": actual_offset,
-        }
-
-        if state:
-            params["State"] = state
-            params["ticketFilter.State"] = state
-        if external_state:
-            params["ExternalState"] = external_state
-            params["ticketFilter.ExternalState"] = external_state
-        if priority:
-            params["Priority"] = priority
-            params["ticketFilter.Priority"] = priority
-        if search_text:
-            params["SearchText"] = search_text
-            params["ticketFilter.SearchText"] = search_text
-        if title:
-            params["Title"] = title
-            params["ticketFilter.Title"] = title
-        if customer:
-            params["Customer"] = customer
-            params["ticketFilter.Customer"] = customer
-        if issuer:
-            params["IssuerFullName"] = issuer
-            params["ticketFilter.IssuerFullName"] = issuer
-        if application_id:
-            params["ApplicationId"] = application_id
-            params["ticketFilter.ApplicationId"] = application_id
-        if application_area_id:
-            params["ApplicationAreaId"] = application_area_id
-            params["ticketFilter.ApplicationAreaId"] = application_area_id
-        if application_sub_area_id:
-            params["ApplicationSubAreaId"] = application_sub_area_id
-            params["ticketFilter.ApplicationSubAreaId"] = application_sub_area_id
-        if level is not None:
-            params["Level"] = level
-            params["ticketFilter.Level"] = level
-        if partner_l1:
-            params["PartnerL1"] = partner_l1
-            params["ticketFilter.PartnerL1"] = partner_l1
-        if partner_l2:
-            params["PartnerL2"] = partner_l2
-            params["ticketFilter.PartnerL2"] = partner_l2
-        if processor:
-            params["Solver"] = processor
-            params["ticketFilter.Solver"] = processor
-        if created_from:
-            params["CreatedFrom"] = created_from
-            params["ticketFilter.CreatedFrom"] = created_from
-        if created_to:
-            params["CreatedTo"] = created_to
-            params["ticketFilter.CreatedTo"] = created_to
-        if solved_from:
-            params["SolvedFrom"] = solved_from
-            params["ticketFilter.SolvedFrom"] = solved_from
-        if solved_to:
-            params["SolvedTo"] = solved_to
-            params["ticketFilter.SolvedTo"] = solved_to
-        if modified_from:
-            params["ModifiedFrom"] = modified_from
-            params["ticketFilter.ModifiedFrom"] = modified_from
-        if modified_to:
-            params["ModifiedTo"] = modified_to
-            params["ticketFilter.ModifiedTo"] = modified_to
-        if sort_by:
-            params["SortBy"] = sort_by
+        # Normalizace řazení
+        order_val = "Descending"
         if sort_direction:
             d = str(sort_direction).strip().lower()
-            if "desc" in d:
-                params["Direction"] = "Descending"
-            elif "asc" in d:
-                params["Direction"] = "Ascending"
+            if "asc" in d:
+                order_val = "Ascending"
+            elif "desc" in d:
+                order_val = "Descending"
             else:
-                params["Direction"] = sort_direction
+                order_val = sort_direction
+        sort_col = sort_by if sort_by else "CreatedOn"
 
-        headers = self._get_headers(token)
-        resp = requests.get(endpoint, headers=headers, params=params, timeout=30)
-        resp.raise_for_status()
+        # 1. POKUS: Moderní grid endpoint POST /api/v1/Tickets/list (podporuje plné řazení i filtry)
+        items = None
+        total = 0
+        use_post_success = False
 
-        data = resp.json()
-        if isinstance(data, dict):
-            items = data.get("items", [])
-            total = data.get("totalCount", len(items))
-        elif isinstance(data, list):
-            items = data
-            total = len(data)
-        else:
-            items = []
-            total = 0
+        try:
+            filters_list = []
+            if state:
+                filters_list.append({"field": "State", "value": [state], "operator": "Equal"})
+            if external_state:
+                filters_list.append({"field": "ExternalState", "value": [external_state], "operator": "Equal"})
+            if priority:
+                filters_list.append({"field": "Priority", "value": [priority], "operator": "Equal"})
+            if customer:
+                filters_list.append({"field": "Customer", "value": [customer], "operator": "Contains"})
+            if issuer:
+                filters_list.append({"field": "IssuerFullName", "value": [issuer], "operator": "Contains"})
+            if application_id:
+                filters_list.append({"field": "ApplicationId", "value": [application_id], "operator": "Equal"})
+            if application_area_id:
+                filters_list.append({"field": "ApplicationAreaId", "value": [application_area_id], "operator": "Equal"})
+            if application_sub_area_id:
+                filters_list.append({"field": "ApplicationSubAreaId", "value": [application_sub_area_id], "operator": "Equal"})
+            if level is not None:
+                filters_list.append({"field": "Level", "value": [level], "operator": "Equal"})
+            if partner_l1:
+                filters_list.append({"field": "PartnerL1", "value": [partner_l1], "operator": "Contains"})
+            if partner_l2:
+                filters_list.append({"field": "PartnerL2", "value": [partner_l2], "operator": "Contains"})
+            if processor:
+                filters_list.append({"field": "Solver", "value": [processor], "operator": "Contains"})
+
+            post_body = {
+                "offset": actual_offset,
+                "limit": limit,
+                "sortColumn": sort_col,
+                "sortOrder": order_val,
+                "filter": {
+                    "wideSearch": search_text if search_text else None,
+                    "filters": filters_list if filters_list else None,
+                }
+            }
+
+            post_endpoint = f"{self.api_url}/api/v1/Tickets/list"
+            resp = requests.post(post_endpoint, headers=headers, json=post_body, timeout=30)
+            if resp.status_code == 200:
+                data = resp.json()
+                if isinstance(data, dict):
+                    items = data.get("items", [])
+                    total = data.get("totalItemsCount", data.get("totalCount", len(items)))
+                    use_post_success = True
+        except Exception:
+            # Fallback na GET endpoint
+            pass
+
+        # 2. POKUS (Fallback): Klasický GET /api/v1/Tickets se všemi variantami parametrů
+        if not use_post_success:
+            get_endpoint = f"{self.api_url}/api/v1/Tickets"
+            params: Dict[str, Any] = {
+                "Limit": limit,
+                "Offset": actual_offset,
+                "pagingFilter.Limit": limit,
+                "pagingFilter.Offset": actual_offset,
+                "SortBy": sort_col,
+                "SortColumn": sort_col,
+                "sortColumn": sort_col,
+                "Direction": order_val,
+                "SortOrder": order_val,
+                "sortOrder": order_val,
+                "sortingFilter.SortBy": sort_col,
+                "sortingFilter.Direction": order_val,
+                "sortingFilter.SortColumn": sort_col,
+                "sortingFilter.SortOrder": order_val,
+            }
+
+            if state:
+                params["State"] = state
+                params["ticketFilter.State"] = state
+            if external_state:
+                params["ExternalState"] = external_state
+                params["ticketFilter.ExternalState"] = external_state
+            if priority:
+                params["Priority"] = priority
+                params["ticketFilter.Priority"] = priority
+            if search_text:
+                params["SearchText"] = search_text
+                params["ticketFilter.SearchText"] = search_text
+            if title:
+                params["Title"] = title
+                params["ticketFilter.Title"] = title
+            if customer:
+                params["Customer"] = customer
+                params["ticketFilter.Customer"] = customer
+            if issuer:
+                params["IssuerFullName"] = issuer
+                params["ticketFilter.IssuerFullName"] = issuer
+            if application_id:
+                params["ApplicationId"] = application_id
+                params["ticketFilter.ApplicationId"] = application_id
+            if application_area_id:
+                params["ApplicationAreaId"] = application_area_id
+                params["AreaId"] = application_area_id
+                params["ticketFilter.ApplicationAreaId"] = application_area_id
+            if application_sub_area_id:
+                params["ApplicationSubAreaId"] = application_sub_area_id
+                params["SubAreaId"] = application_sub_area_id
+                params["ticketFilter.ApplicationSubAreaId"] = application_sub_area_id
+            if level is not None:
+                params["Level"] = level
+                params["ticketFilter.Level"] = level
+            if partner_l1:
+                params["PartnerL1"] = partner_l1
+                params["ticketFilter.PartnerL1"] = partner_l1
+            if partner_l2:
+                params["PartnerL2"] = partner_l2
+                params["ticketFilter.PartnerL2"] = partner_l2
+            if processor:
+                params["Solver"] = processor
+                params["ticketFilter.Solver"] = processor
+            if created_from:
+                params["CreatedFrom"] = created_from
+                params["ticketFilter.CreatedFrom"] = created_from
+            if created_to:
+                params["CreatedTo"] = created_to
+                params["ticketFilter.CreatedTo"] = created_to
+            if solved_from:
+                params["SolvedFrom"] = solved_from
+                params["ticketFilter.SolvedFrom"] = solved_from
+            if solved_to:
+                params["SolvedTo"] = solved_to
+                params["ticketFilter.SolvedTo"] = solved_to
+            if modified_from:
+                params["ModifiedFrom"] = modified_from
+                params["ticketFilter.ModifiedFrom"] = modified_from
+            if modified_to:
+                params["ModifiedTo"] = modified_to
+                params["ticketFilter.ModifiedTo"] = modified_to
+
+            resp = requests.get(get_endpoint, headers=headers, params=params, timeout=30)
+            resp.raise_for_status()
+
+            data = resp.json()
+            if isinstance(data, dict):
+                items = data.get("items", [])
+                total = data.get("totalCount", data.get("totalItemsCount", len(items)))
+            elif isinstance(data, list):
+                items = data
+                total = len(data)
+            else:
+                items = []
+                total = 0
 
         # Optimalizace dat pro LLM kontext - vytáhnout nejdůležitější pole dle TicketModelSummary
         formatted = []
-        for t in items:
+        for t in (items or []):
             formatted.append({
                 "id": t.get("id"),
                 "ticket_code": f"{t.get('applicationCode', '')}-{t.get('number', '')}".strip("-"),

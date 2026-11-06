@@ -22,6 +22,7 @@ from helpdesk_api import HelpdeskClient
 # Načtení .env pokud existuje
 load_dotenv()
 
+SERVER_VERSION = "1.31.0"
 PORT = int(os.environ.get("PORT", "8095"))
 HOST = os.environ.get("HOST", "0.0.0.0")
 API_URL = os.environ.get("API_URL", "https://avaplace.com/api/asoleu/helpdesk")
@@ -41,6 +42,7 @@ active_login: Optional[tuple] = None
 
 # Vytvoření FastMCP instance
 mcp = FastMCP("ASOL AVAplace Helpdesk", dependencies=["requests"])
+mcp._mcp_server.version = SERVER_VERSION
 
 
 def _extract_credentials_from_request(request: Request) -> Optional[tuple]:
@@ -388,6 +390,7 @@ async def health_check(request: Request) -> JSONResponse:
     return JSONResponse({
         "status": "healthy",
         "service": "asolhelpdeskmcp",
+        "version": SERVER_VERSION,
         "port": PORT,
         "api_url": API_URL,
     })
