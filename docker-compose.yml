@@ -1,9 +1,14 @@
 services:
   asolhelpdeskmcp:
-    build: .
+    build:
+      context: .
+      network: host
     image: asolhelpdeskmcp:latest
     container_name: asolhelpdeskmcp
     restart: unless-stopped
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     environment:
       - TZ=Europe/Prague
       - PORT=8095
