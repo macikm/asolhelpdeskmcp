@@ -30,6 +30,8 @@ class HelpdeskClient:
 
         # Paměť tokenů: {(username, password): (token, expires_at)}
         self._token_cache: Dict[tuple, tuple] = {}
+        # Cache pro schéma gridu tiketů (podporovaná pole a jejich typy)
+        self._filter_definitions: Optional[Dict[str, Any]] = None
 
     def get_token(self, username: str, password: str) -> Optional[str]:
         """Získá nebo vrátí z cache platný OAuth2 token pro dané credentials."""
@@ -136,32 +138,64 @@ class HelpdeskClient:
         use_post_success = False
         post_error_info = None
 
+        # Načtení oficiální definice podporovaných polí z Helpdesku (zakešováno)
+        supported_fields = {}
+        try:
+            if not self._filter_definitions:
+                self._filter_definitions = self.get_ticket_list_definition(token)
+            if isinstance(self._filter_definitions, dict):
+                raw_fields = self._filter_definitions.get("filterDefinition", {}).get("fields", [])
+                for rf in raw_fields:
+                    fn = rf.get("fieldName")
+                    if fn:
+                        supported_fields[fn.lower()] = {
+                            "fieldName": fn,
+                            "type": rf.get("type", "Text"),
+                        }
+        except Exception as e:
+            print(f"ℹ️ Nepodařilo se načíst TicketListDefinition: {e}")
+
         try:
             filters_list = []
-            if state:
-                filters_list.append({"field": "State", "type": "List", "value": [state], "operator": "Equal"})
-            if external_state:
-                filters_list.append({"field": "ExternalState", "type": "List", "value": [external_state], "operator": "Equal"})
-            if priority:
-                filters_list.append({"field": "Priority", "type": "List", "value": [priority], "operator": "Equal"})
-            if customer:
-                filters_list.append({"field": "Customer", "type": "Text", "value": [customer], "operator": "Contains"})
-            if issuer:
-                filters_list.append({"field": "IssuerFullName", "type": "Text", "value": [issuer], "operator": "Contains"})
-            if application_id:
-                filters_list.append({"field": "ApplicationId", "type": "List", "value": [application_id], "operator": "Equal"})
-            if application_area_id:
-                filters_list.append({"field": "ApplicationAreaId", "type": "List", "value": [application_area_id], "operator": "Equal"})
-            if application_sub_area_id:
-                filters_list.append({"field": "ApplicationSubAreaId", "type": "List", "value": [application_sub_area_id], "operator": "Equal"})
-            if level is not None:
-                filters_list.append({"field": "Level", "type": "Number", "value": [level], "operator": "Equal"})
-            if partner_l1:
-                filters_list.append({"field": "PartnerL1", "type": "Text", "value": [partner_l1], "operator": "Contains"})
-            if partner_l2:
-                filters_list.append({"field": "PartnerL2", "type": "Text", "value": [partner_l2], "operator": "Contains"})
-            if processor:
-                filters_list.append({"field": "Solver", "type": "Text", "value": [processor], "operator": "Contains"})
+
+            def add_filter(candidate_names: List[str], val: Any, default_type: str, default_op: str):
+                if val is None or val == "":
+                    return
+                target_field = None
+                target_type = default_type
+                if supported_fields:
+                    for cand in candidate_names:
+                        cl = cand.lower()
+                        if cl in supported_fields:
+                            target_field = supported_fields[cl]["fieldName"]
+                            target_type = supported_fields[cl]["type"] or default_type
+                            break
+                else:
+                    target_field = candidate_names[0]
+
+                if target_field:
+                    val_list = val if isinstance(val, list) else [val]
+                    filters_list.append({
+                        "field": target_field,
+                        "type": target_type,
+                        "value": val_list,
+                        "operator": default_op
+                    })
+                else:
+                    print(f"ℹ️ Pole z kandidátů {candidate_names} není v definici gridu, vynechávám z POST")
+
+            add_filter(["State", "state"], state, "List", "Equal")
+            add_filter(["ExternalState", "externalState"], external_state, "List", "Equal")
+            add_filter(["Priority", "priority"], priority, "List", "Equal")
+            add_filter(["Customer", "customer", "IssuerCompany"], customer, "Text", "Contains")
+            add_filter(["IssuerFullName", "issuerFullName", "IssuerName", "Issuer"], issuer, "Text", "Contains")
+            add_filter(["ApplicationId", "applicationId", "Application", "application", "ApplicationCode"], application_id, "List", "Equal")
+            add_filter(["ApplicationAreaId", "applicationAreaId", "ApplicationArea", "applicationArea", "AreaId", "Area"], application_area_id, "List", "Equal")
+            add_filter(["ApplicationSubAreaId", "applicationSubAreaId", "ApplicationSubArea", "applicationSubArea", "SubAreaId", "SubArea"], application_sub_area_id, "List", "Equal")
+            add_filter(["Level", "level"], level, "Number", "Equal")
+            add_filter(["PartnerL1", "partnerL1", "AssignedPartnerL1", "assignedPartnerL1", "PartnerL1Name", "Partner"], partner_l1, "Text", "Contains")
+            add_filter(["PartnerL2", "partnerL2", "AssignedPartnerL2", "assignedPartnerL2", "PartnerL2Name"], partner_l2, "Text", "Contains")
+            add_filter(["Solver", "solver", "AssignedSolver", "assignedSolver", "Processor"], processor, "Text", "Contains")
 
             post_body = {
                 "offset": actual_offset,
@@ -435,6 +469,29 @@ class HelpdeskClient:
             }
             for c in comments
         ]
+
+    def get_ticket_list_definition(self, token: str) -> Dict[str, Any]:
+        """Získá oficiální definici pohledu a filtrů pro grid tiketů z Helpdesku."""
+        endpoint = f"{self.api_url}/api/v1/Tickets/list/definition"
+        headers = self._get_headers(token)
+        resp = requests.get(endpoint, headers=headers, timeout=20)
+        resp.raise_for_status()
+        data = resp.json()
+
+        filter_fields = []
+        if isinstance(data, dict):
+            raw_fields = data.get("filterDefinition", {}).get("fields", [])
+            for f in raw_fields:
+                filter_fields.append({
+                    "fieldName": f.get("fieldName"),
+                    "type": f.get("type"),
+                    "label": f.get("label"),
+                })
+            print(f"📋 [TicketListDefinition] Načteno {len(filter_fields)} podporovaných polí filtrů:")
+            for f in filter_fields:
+                print(f"   - {f.get('fieldName')} ({f.get('type')})")
+
+        return data
 
     def get_applications(self, token: str) -> List[Dict[str, Any]]:
         """Získá seznam dostupných aplikací."""

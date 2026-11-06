@@ -22,7 +22,7 @@ from helpdesk_api import HelpdeskClient
 # Načtení .env pokud existuje
 load_dotenv()
 
-SERVER_VERSION = "1.32.0"
+SERVER_VERSION = "1.33.0"
 PORT = int(os.environ.get("PORT", "8095"))
 HOST = os.environ.get("HOST", "0.0.0.0")
 API_URL = os.environ.get("API_URL", "https://avaplace.com/api/asoleu/helpdesk")
@@ -281,6 +281,22 @@ def get_ticket_comments(ticket_identifier: str, ctx: Context = None) -> Any:
         return client.get_ticket_comments(token=token, ticket_identifier=ticket_identifier)
     except Exception as e:
         return f"Chyba při načítání komentářů pro tiket '{ticket_identifier}': {e}"
+
+
+@mcp.tool()
+def get_ticket_list_definition(ctx: Context = None) -> Any:
+    """
+    Vrátí oficiální schéma gridu tiketů (podporovaná pole filtrů a sloupce zobrazení) z Helpdesku.
+    Umožňuje zjistit přesné názvy a typy polí pro filtrování a řazení v POST /api/v1/Tickets/list.
+    """
+    token = resolve_auth(ctx)
+    if not token:
+        return "⚠️ Nejste přihlášeni. Použijte nástroj 'helpdesk_login(username, password)'."
+
+    try:
+        return client.get_ticket_list_definition(token=token)
+    except Exception as e:
+        return f"Chyba při načítání definice gridu tiketů: {e}"
 
 
 @mcp.tool()

@@ -126,4 +126,5 @@ Model automaticky zavolá nástroj `helpdesk_login`, získá OAuth2 token a od t
 | `get_ticket_comments(ticket_identifier)` | Vrátí seznam všech komentářů a konverzace k tiketu. |
 | `get_applications()` | Seznam modulů / aplikací v Helpdesku (včetně jejich ID). |
 | `get_application_areas(application_id)` | Vrátí hierarchii oblastí a podoblastí pro danou aplikaci (pro filtry v `search_tickets`). |
+| `get_ticket_list_definition()` | Vrátí oficiální schéma gridu tiketů (všechna podporovaná pole filtrů a sloupce) z Helpdesku. |
 | `get_filter_options()` | Vrátí číselníky platných stavů, priorit, úrovní a typů pro nápovědu modelu. |
