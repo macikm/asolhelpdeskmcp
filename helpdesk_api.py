@@ -151,6 +151,8 @@ class HelpdeskClient:
                         supported_fields[fn.lower()] = {
                             "fieldName": fn,
                             "type": rf.get("type", "Text"),
+                            "defaultOperator": rf.get("defaultOperator"),
+                            "operators": rf.get("operators") or rf.get("allowedOperators") or [],
                         }
         except Exception as e:
             print(f"ℹ️ Nepodařilo se načíst TicketListDefinition: {e}")
@@ -159,31 +161,37 @@ class HelpdeskClient:
             filters_list = []
             applied_filters = set()
 
-            def add_filter(candidate_names: List[str], val: Any, param_name: str, default_type: str = "Text"):
+            def add_filter(candidate_names: List[str], val: Any, param_name: str, fallback_type: str = "Text", fallback_op: str = "Equal"):
                 if val is None or val == "":
                     return
                 target_field = None
-                target_type = default_type
+                target_type = fallback_type
+                target_op = fallback_op
+
                 if supported_fields:
                     for cand in candidate_names:
                         cl = cand.lower()
                         if cl in supported_fields:
-                            target_field = supported_fields[cl]["fieldName"]
-                            target_type = supported_fields[cl]["type"] or default_type
+                            field_meta = supported_fields[cl]
+                            target_field = field_meta["fieldName"]
+                            target_type = field_meta["type"] or fallback_type
+                            # Použít oficiální defaultOperator z definice gridu
+                            if field_meta.get("defaultOperator"):
+                                target_op = field_meta["defaultOperator"]
+                            elif target_type in ("List", "HierarchicalList"):
+                                target_op = "Includes"
+                            elif target_type == "Text":
+                                target_op = "Like"
                             break
                 else:
                     target_field = candidate_names[0]
+                    if target_type in ("List", "HierarchicalList"):
+                        target_op = "Includes"
+                    elif target_type == "Text":
+                        target_op = "Like"
 
                 if target_field:
-                    # Správný operátor podle typu pole
-                    if target_type in ("List", "HierarchicalList"):
-                        op = "Includes"
-                    elif target_type == "Text":
-                        op = "Contains"
-                    else:
-                        op = "Equal"
-
-                    # Hodnoty musí být pole
+                    # Hodnoty musí být pole řetězců
                     if isinstance(val, list):
                         val_list = [str(x) for x in val]
                     else:
@@ -193,55 +201,72 @@ class HelpdeskClient:
                         "field": target_field,
                         "type": target_type,
                         "value": val_list,
-                        "operator": op,
+                        "operator": target_op,
                     })
                     applied_filters.add(param_name)
-                    print(f"✅ Přidán POST filtr: {target_field} ({target_type}) {op} {val_list}")
+                    print(f"✅ Přidán POST filtr: {target_field} ({target_type}) {target_op} {val_list}")
                 else:
                     print(f"⚠️ Pole pro parametr '{param_name}' (kandidáti {candidate_names}) není v definici gridu")
 
             # 1. Běžné filtry s přímou shodou v definici gridu
-            add_filter(["State", "state"], state, "state", "List")
-            add_filter(["ExternalState", "externalState"], external_state, "external_state", "List")
-            add_filter(["Priority", "priority"], priority, "priority", "List")
-            add_filter(["Level", "level"], str(level) if level is not None else None, "level", "List")
-            add_filter(["Customer", "customer", "IssuerCompany"], customer, "customer", "Text")
-            add_filter(["IssuerFullName", "issuerFullName", "IssuerName", "Issuer"], issuer, "issuer", "Text")
-            add_filter(["AssignedPartnerL1", "PartnerL1", "partnerL1", "partnerl1"], partner_l1, "partner_l1", "Text")
-            add_filter(["AssignedPartnerL2", "PartnerL2", "partnerL2", "partnerl2"], partner_l2, "partner_l2", "Text")
-            add_filter(["Solver", "solver", "AssignedSolver", "assignedSolver", "Processor"], processor, "processor", "Text")
+            add_filter(["State", "state"], state, "state", "List", "Includes")
+            add_filter(["ExternalState", "externalState"], external_state, "external_state", "List", "Includes")
+            add_filter(["Priority", "priority"], priority, "priority", "List", "Includes")
+            add_filter(["Level", "level"], str(level) if level is not None else None, "level", "List", "Includes")
+            add_filter(["Customer", "customer", "IssuerCompany"], customer, "customer", "Text", "Like")
+            add_filter(["IssuerFullName", "issuerFullName", "IssuerName", "Issuer"], issuer, "issuer", "Text", "Like")
+            add_filter(["AssignedPartnerL1", "PartnerL1", "partnerL1", "partnerl1"], partner_l1, "partner_l1", "Text", "Like")
+            add_filter(["AssignedPartnerL2", "PartnerL2", "partnerL2", "partnerl2"], partner_l2, "partner_l2", "Text", "Like")
+            add_filter(["Solver", "solver", "AssignedSolver", "assignedSolver", "Processor"], processor, "processor", "Text", "Like")
 
             # 2. Hierarchické pole aplikace a oblasti (ApplicationAreaSubarea)
-            # V gridu Helpdesku je celá hierarchie sloučena do pole ApplicationAreaSubarea
+            # Helpdesk vyžaduje přesné prefixy: 'Area|<guid>', 'SubArea|<guid>', 'Application|<guid>'
             hierarchy_val = []
             if application_sub_area_id:
-                hierarchy_val.append(str(application_sub_area_id))
+                val_sub = str(application_sub_area_id).strip()
+                if not val_sub.startswith("SubArea|") and not val_sub.startswith("Area|") and not val_sub.startswith("Application|"):
+                    val_sub = f"SubArea|{val_sub}"
+                hierarchy_val.append(val_sub)
                 applied_filters.add("application_sub_area_id")
-            elif application_area_id:
-                hierarchy_val.append(str(application_area_id))
+
+            if application_area_id:
+                val_area = str(application_area_id).strip()
+                if not val_area.startswith("SubArea|") and not val_area.startswith("Area|") and not val_area.startswith("Application|"):
+                    val_area = f"Area|{val_area}"
+                hierarchy_val.append(val_area)
                 applied_filters.add("application_area_id")
+
+            if application_id and not application_area_id and not application_sub_area_id:
+                val_app = str(application_id).strip()
+                if not val_app.startswith("SubArea|") and not val_app.startswith("Area|") and not val_app.startswith("Application|"):
+                    val_app = f"Application|{val_app}"
+                hierarchy_val.append(val_app)
+                applied_filters.add("application_id")
             elif application_id:
-                hierarchy_val.append(str(application_id))
+                # Pokud byla zadána oblast pod aplikací, aplikace je implicitně pokryta
                 applied_filters.add("application_id")
 
             if hierarchy_val:
-                # Ověřit, jak se pole jmenuje v definici gridu
                 hier_field_name = "ApplicationAreaSubarea"
                 hier_type = "HierarchicalList"
+                hier_op = "Includes"
+
                 if supported_fields:
                     for cand in ["applicationareasubarea", "applicationarea", "area"]:
                         if cand in supported_fields:
-                            hier_field_name = supported_fields[cand]["fieldName"]
-                            hier_type = supported_fields[cand]["type"] or "HierarchicalList"
+                            field_meta = supported_fields[cand]
+                            hier_field_name = field_meta["fieldName"]
+                            hier_type = field_meta["type"] or "HierarchicalList"
+                            hier_op = field_meta.get("defaultOperator") or "Includes"
                             break
 
                 filters_list.append({
                     "field": hier_field_name,
                     "type": hier_type,
                     "value": hierarchy_val,
-                    "operator": "Includes",
+                    "operator": hier_op,
                 })
-                print(f"✅ Přidán POST filtr oblasti: {hier_field_name} ({hier_type}) Includes {hierarchy_val}")
+                print(f"✅ Přidán POST filtr oblasti: {hier_field_name} ({hier_type}) {hier_op} {hierarchy_val}")
 
             # Kontrola vynechaných filtrů zadaných uživatelem
             omitted_user_filters = []
@@ -562,11 +587,13 @@ class HelpdeskClient:
                 filter_fields.append({
                     "fieldName": f.get("fieldName"),
                     "type": f.get("type"),
+                    "defaultOperator": f.get("defaultOperator"),
+                    "operators": f.get("operators") or f.get("allowedOperators"),
                     "label": f.get("label"),
                 })
             print(f"📋 [TicketListDefinition] Načteno {len(filter_fields)} podporovaných polí filtrů:")
             for f in filter_fields:
-                print(f"   - {f.get('fieldName')} ({f.get('type')})")
+                print(f"   - {f.get('fieldName')} ({f.get('type')}, defaultOp={f.get('defaultOperator')})")
 
         return data
 
